@@ -78,6 +78,9 @@ public class CommandExecutor {
             case "wait":
                 executeWaitCommand(tokens);
                 return true;
+            case "hover":
+                executeHoverCommand(tokens);
+                return true;
 
             default:
                 logger.info("This should never happen.");
@@ -108,6 +111,9 @@ public class CommandExecutor {
         if (isStartCommandAvailable()) {
             availableCommands.add("start");
         }
+        if (isHoverCommandAvailable()) {
+            availableCommands.add("hover");
+        }
         if (isInDungeon()) {
             availableCommands.add("key");
             availableCommands.add("click");
@@ -129,6 +135,18 @@ public class CommandExecutor {
 
     public static boolean isInDungeon() {
         return CardCrawlGame.mode == CardCrawlGame.GameMode.GAMEPLAY && AbstractDungeon.isPlayerInDungeon() && AbstractDungeon.currMapNode != null;
+    }
+
+    /**
+     * Hovering is available whenever there are cards in hand to hover, including
+     * cards that cannot currently be played -- pointing at an unaffordable card
+     * is a perfectly reasonable thing for a client to want to do.
+     */
+    private static boolean isHoverCommandAvailable() {
+        return isInDungeon()
+                && AbstractDungeon.getCurrRoom().phase == AbstractRoom.RoomPhase.COMBAT
+                && !AbstractDungeon.isScreenUp
+                && !AbstractDungeon.player.hand.group.isEmpty();
     }
 
     private static boolean isPlayCommandAvailable() {
@@ -449,6 +467,59 @@ public class CommandExecutor {
                 throw new InvalidCommandException(tokens, InvalidCommandException.InvalidCommandFormat.OUT_OF_BOUNDS, tokens[4]);
             }
         }
+        GameStateListener.setTimeout(timeout);
+    }
+
+    /**
+     * Moves the cursor onto a card in hand so the game hovers it, without playing
+     * it. Intended for watching a bot play: hover the card it is about to use,
+     * pause, then play it, so a human can read the choice before it happens.
+     *
+     * This deliberately drives the game's own input path rather than forcing
+     * hb.hovered, so the card lifts, glows and shows its tooltip exactly as it
+     * would under a real mouse.
+     *
+     * Hovering changes no game state, so nothing would register a state change
+     * and the caller would wait forever for a reply that is not coming. The
+     * timeout is what guarantees an answer -- the same mechanism KEY and CLICK
+     * use, for the same reason.
+     */
+    private static void executeHoverCommand(String[] tokens) throws InvalidCommandException {
+        if (tokens.length < 2) {
+            throw new InvalidCommandException(tokens, InvalidCommandException.InvalidCommandFormat.MISSING_ARGUMENT);
+        }
+        int card_index;
+        try {
+            card_index = Integer.parseInt(tokens[1]);
+        } catch (NumberFormatException e) {
+            throw new InvalidCommandException(tokens, InvalidCommandException.InvalidCommandFormat.INVALID_ARGUMENT, tokens[1]);
+        }
+        // Hand positions are 1-based, matching PLAY.
+        if (card_index < 1 || card_index > AbstractDungeon.player.hand.size()) {
+            throw new InvalidCommandException(tokens, InvalidCommandException.InvalidCommandFormat.OUT_OF_BOUNDS, tokens[1]);
+        }
+        int timeout = 30;
+        if (tokens.length >= 3) {
+            try {
+                timeout = Integer.parseInt(tokens[2]);
+            } catch (NumberFormatException e) {
+                throw new InvalidCommandException(tokens, InvalidCommandException.InvalidCommandFormat.INVALID_ARGUMENT, tokens[2]);
+            }
+            if (timeout < 0) {
+                throw new InvalidCommandException(tokens, InvalidCommandException.InvalidCommandFormat.OUT_OF_BOUNDS, tokens[2]);
+            }
+        }
+        AbstractCard card = AbstractDungeon.player.hand.group.get(card_index - 1);
+        // Gdx's cursor origin is top-left, hitboxes are bottom-left; this flip is
+        // what CInputHelper.setCursor does.
+        int y = (int) (Settings.HEIGHT - card.hb.cY);
+        if (y < 0) {
+            y = 0;
+        } else if (y > Settings.HEIGHT) {
+            y = Settings.HEIGHT;
+        }
+        Gdx.input.setCursorPosition((int) card.hb.cX, y);
+        InputHelper.updateFirst();
         GameStateListener.setTimeout(timeout);
     }
 
